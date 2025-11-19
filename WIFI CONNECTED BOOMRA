@@ -1,0 +1,154 @@
+#include <UnoR4WiFi_WebServer.h>
+#include "index.h"
+
+#define CMD_STOP 0
+#define CMD_FORWARD 1
+#define CMD_BACKWARD 2
+#define CMD_LEFT 4
+#define CMD_RIGHT 8
+
+#define ENA_PIN 10  // The Arduino pin connected to the ENA pin L298N
+#define IN1_PIN 6  // The Arduino pin connected to the IN1 pin L298N
+#define IN2_PIN 5  // The Arduino pin connected to the IN2 pin L298N
+#define IN3_PIN 4  // The Arduino pin connected to the IN3 pin L298N
+#define IN4_PIN 3  // The Arduino pin connected to the IN4 pin L298N
+#define ENB_PIN 9  // The Arduino pin connected to the ENB pin L298N
+
+int speed = 100; // Speed of the motors
+
+// WiFi credentials (changes for every wifi and works for phone hotspot as well)
+const char WIFI_SSID[] = "LisgarTeam"; 
+const char WIFI_PASSWORD[] = "Lisgar2025";
+
+// Create web server instance
+UnoR4WiFi_WebServer server(80);
+UnoR4WiFi_WebSocket *webSocket;
+
+// Page handlers
+void handleHome(WiFiClient& client, const String& method, const String& request, const QueryParams& params, const String& jsonData) {
+  server.sendResponse(client, HTML_CONTENT);
+}
+
+// WebSocket event handlers
+void onWebSocketOpen(net::WebSocket& ws) {
+  Serial.println("New WebSocket connection");
+}
+
+void onWebSocketMessage(net::WebSocket& ws, const net::WebSocket::DataType dataType, const char* message, uint16_t length) {
+  String cmd_str = String((char*)message);
+  int command = cmd_str.toInt();
+  Serial.print("command: ");
+  Serial.println(command);
+
+  switch (command) {
+    case CMD_STOP:
+      Serial.println("Stop");
+      CAR_stop();
+      break;
+    case CMD_FORWARD:
+      Serial.println("Move Forward");
+      CAR_moveForward();
+      break;
+    case CMD_BACKWARD:
+      Serial.println("Move Backward");
+      CAR_moveBackward();
+      break;
+    case CMD_LEFT:
+      Serial.println("Turn Left");
+      CAR_turnLeft();
+      break;
+    case CMD_RIGHT:
+      Serial.println("Turn Right");
+      CAR_turnRight();
+      break;
+
+    default:
+      Serial.println("Unknown command");
+  }
+}
+
+void onWebSocketClose(net::WebSocket& ws, const net::WebSocket::CloseCode code, const char* reason, uint16_t length) {
+  Serial.println("WebSocket client disconnected");
+}
+
+void setup() {
+  Serial.begin(9600);
+  delay(1000);
+
+  pinMode(ENA_PIN, OUTPUT);
+  pinMode(IN1_PIN, OUTPUT);
+  pinMode(IN2_PIN, OUTPUT);
+  pinMode(IN3_PIN, OUTPUT);
+  pinMode(IN4_PIN, OUTPUT);
+  pinMode(ENB_PIN, OUTPUT);
+
+  analogWrite(ENA_PIN, speed);  // set full speed
+  analogWrite(ENB_PIN, speed);  // set full speed
+
+  Serial.println("Arduino Uno R4 WiFi - WebSocket Server");
+
+  // Configure web server routes
+  server.addRoute("/", handleHome);
+
+  // Start web server with WiFi connection
+  server.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  // Enable WebSocket functionality
+  webSocket = server.enableWebSocket(81);
+
+  if (webSocket != nullptr) {
+    // Set up WebSocket event handlers
+    webSocket->onOpen(onWebSocketOpen);
+    webSocket->onMessage(onWebSocketMessage);
+    webSocket->onClose(onWebSocketClose);
+  } else {
+    Serial.println("Failed to start WebSocket server");
+  }
+}
+
+void loop() {
+  // Handle HTTP requests and WebSocket connections using the library
+  server.handleClient();
+  server.handleWebSocket();
+
+  delay(10);
+}
+
+
+void CAR_moveForward() {
+  digitalWrite(IN1_PIN, speed);
+  digitalWrite(IN2_PIN, LOW);
+  digitalWrite(IN3_PIN, speed);
+  digitalWrite(IN4_PIN, LOW);
+}
+
+void CAR_moveBackward() {
+  digitalWrite(IN1_PIN, LOW);
+  digitalWrite(IN2_PIN, speed);
+  digitalWrite(IN3_PIN, LOW);
+  digitalWrite(IN4_PIN, speed);
+}
+
+void CAR_turnLeft() {
+  digitalWrite(IN1_PIN, speed);
+  digitalWrite(IN2_PIN, LOW);
+  digitalWrite(IN3_PIN, LOW);
+  digitalWrite(IN4_PIN, LOW);
+}
+
+void CAR_turnRight() {
+  digitalWrite(IN1_PIN, LOW);
+  digitalWrite(IN2_PIN, LOW);
+  digitalWrite(IN3_PIN, speed);
+  digitalWrite(IN4_PIN, LOW);
+}
+
+void CAR_stop() {
+  digitalWrite(IN1_PIN, LOW);
+  digitalWrite(IN2_PIN, LOW);
+  digitalWrite(IN3_PIN, LOW);
+  digitalWrite(IN4_PIN, LOW);
+}
+
+
+
