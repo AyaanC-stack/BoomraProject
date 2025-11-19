@@ -1,0 +1,39 @@
+#include <SoftwareSerial.h>
+
+// RX, TX pins for SoftwareSerial (connect to Shield TX/RX)
+SoftwareSerial BTSerial(6, 7); // RX = 6, TX = 7
+
+void setup() {
+  // Debugging via Serial Monitor
+  Serial.begin(9600);
+  // Bluetooth serial
+  BTSerial.begin(9600);
+
+  Serial.println("Configuring Bluetooth Shield on pins 6 & 7...");
+
+  // Put module into slave mode
+  BTSerial.print("AT+ROLE=0\r\n");   // 0 = Slave
+  delay(100);
+
+  // Set device name
+  BTSerial.print("AT+NAME=ArduinoBT\r\n");
+  delay(100);
+
+  // Set PIN code
+  BTSerial.print("AT+PSWD=1234\r\n");
+  delay(100);
+
+  Serial.println("Bluetooth setup complete. Waiting for connection...");
+}
+
+void loop() {
+  // Echo data between Serial Monitor and Bluetooth
+  if (BTSerial.available()) {
+    char c = BTSerial.read();
+    Serial.write(c);
+  }
+  if (Serial.available()) {
+    char c = Serial.read();
+    BTSerial.write(c);
+  }
+}
