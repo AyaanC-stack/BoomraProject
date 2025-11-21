@@ -1,0 +1,53 @@
+/*This code should be uploaded to all beacons with some changes 
+depending on their set ID (Check comments)*/
+
+
+
+#include <SoftwareSerial.h>
+
+// Define the RX and TX pins for the software serial port
+    const int SW_SERIAL_RX_PIN = 6;
+    const int SW_SERIAL_TX_PIN = 7;
+
+    const byte signalPin = 3; // Must be interrupt-capable pin on Arduino Uno
+    volatile unsigned long lastMicros = 0;
+    volatile unsigned long periodMicros = 0;
+    volatile bool newData = false;
+
+void measurePeriod() {
+  unsigned long now = micros();
+  periodMicros = now - lastMicros;
+  lastMicros = now;
+  newData = true;
+}
+
+
+
+    // Create a SoftwareSerial object
+    SoftwareSerial mySoftwareSerial(SW_SERIAL_RX_PIN, SW_SERIAL_TX_PIN);
+     void setup() {
+      mySoftwareSerial.begin(9600); // Initialize software serial at 600 baud
+      delay(2000);
+        pinMode(signalPin, INPUT);
+  attachInterrupt(digitalPinToInterrupt(signalPin), measurePeriod, RISING);
+    }
+
+    void loop() {
+      if (newData) {
+    noInterrupts();
+    unsigned long period = periodMicros;
+    newData = false;
+    interrupts();
+
+    if (period > 800 && period < 1200) {
+      mySoftwareSerial.println("111"); // Changes these numbers depending on the ID (ex: Beacon 1 is "111", Beacon 3 is "333" etc...)
+      delay(2500);
+    }
+    }
+    while (mySoftwareSerial.available()) { //Only add this if you would like to see the coordinates on serial monitor of a beacon
+      char c = mySoftwareSerial.read();
+      Serial.write(c);
+    }
+  }
+     
+  
