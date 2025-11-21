@@ -46,13 +46,29 @@ Detection detections[MAX_DETECTIONS];
 int detCount = 0;
 
 // ----------------------- UTILS -----------------------------
+
+/*
+ * Converts degrees to radians.
+ * Input: angle in degrees.
+ * Output: angle in radians.
+ */
 float degToRad(float deg) {
   return deg * 3.1415926535 / 180.0;
 }
+
+/*
+ * Converts radians to degrees.
+ * Input: angle in radians.
+ * Output: angle in degrees.
+ */
 float radToDeg(float rad) {
   return rad * 180.0 / 3.1415926535;
 }
 
+/*
+ * Immediately stops all motor outputs by setting PWM to zero.
+ * No inputs, no return.
+ */
 void stopMotors() {
   analogWrite(LEFT_FWD_PIN, 0);
   analogWrite(LEFT_BWD_PIN, 0);
@@ -60,6 +76,11 @@ void stopMotors() {
   analogWrite(RIGHT_BWD_PIN, 0);
 }
 
+/*
+ * Rotates the robot in place by driving left motor forward and right motor backward.
+ * Input: pwm — rotation motor speed.
+ * No return value.
+ */
 void rotate(int pwm) {
   analogWrite(LEFT_FWD_PIN, pwm);
   analogWrite(LEFT_BWD_PIN, 0);
@@ -68,9 +89,25 @@ void rotate(int pwm) {
 }
 
 // ---------------- LINE INTERSECTION ------------------------
+
+/*
+ * Computes the intersection point of two lines, each defined by a beacon position
+ * and a measured bearing angle from the robot.
+ *
+ * Inputs:
+ *   (xA, yA), alphaA — beacon A position and angle
+ *   (xB, yB), alphaB — beacon B position and angle
+ *
+ * Outputs:
+ *   rx, ry — intersection point (robot estimate)
+ *
+ * Returns:
+ *   true  — intersection exists
+ *   false — lines are parallel or nearly parallel
+ */
 bool linesBeacons(float xA, float yA, float alphaA,
-                               float xB, float yB, float alphaB,
-                               float &rx, float &ry) {
+                  float xB, float yB, float alphaB,
+                  float &rx, float &ry) {
   float ux = -cos(alphaA);
   float uy = -sin(alphaA);
   float vx = -cos(alphaB);
@@ -89,6 +126,26 @@ bool linesBeacons(float xA, float yA, float alphaA,
 }
 
 // ---------------- TRIANGULATION ---------------------------
+
+/*
+ * Computes the robot's position based on detection timestamps.
+ *
+ * Requires at least four detections in the pattern:
+ *   A (first beacon)
+ *   B (second beacon)
+ *   C (third beacon)
+ *   A (same as first beacon)
+ *
+ * This function extracts time differences, computes angles, computes line
+ * intersections between beacon bearings, averages valid intersection points.
+ *
+ * Output:
+ *   finalX, finalY — estimated robot coordinates
+ *
+ * Returns:
+ *   true  — position successfully computed
+ *   false — insufficient or invalid detection data
+ */
 bool computeRobotPosition(float &finalX, float &finalY) {
   if (detCount < 4) return false;
 
@@ -137,7 +194,6 @@ bool computeRobotPosition(float &finalX, float &finalY) {
   float bB = angle12;
   float bC = angle12 + angle23;
 
-  // normalize angles
   while (bA < 0) bA += 360;
   while (bA >= 360) bA -= 360;
   while (bB < 0) bB += 360;
@@ -150,38 +206,18 @@ bool computeRobotPosition(float &finalX, float &finalY) {
   float alphaC = degToRad(bC);
 
   float bxA, byA, bxB, byB, bxC, byC;
-  if (idA == 1) {
-    bxA = bx1;
-    byA = by1;
-  } else if (idA == 2) {
-    bxA = bx2;
-    byA = by2;
-  } else {
-    bxA = bx3;
-    byA = by3;
-  }
 
-  if (idB == 1) {
-    bxB = bx1;
-    byB = by1;
-  } else if (idB == 2) {
-    bxB = bx2;
-    byB = by2;
-  } else {
-    bxB = bx3;
-    byB = by3;
-  }
+  if (idA == 1) { bxA = bx1; byA = by1; }
+  else if (idA == 2) { bxA = bx2; byA = by2; }
+  else { bxA = bx3; byA = by3; }
 
-  if (idC == 1) {
-    bxC = bx1;
-    byC = by1;
-  } else if (idC == 2) {
-    bxC = bx2;
-    byC = by2;
-  } else {
-    bxC = bx3;
-    byC = by3;
-  }
+  if (idB == 1) { bxB = bx1; byB = by1; }
+  else if (idB == 2) { bxB = bx2; byB = by2; }
+  else { bxB = bx3; byB = by3; }
+
+  if (idC == 1) { bxC = bx1; byC = by1; }
+  else if (idC == 2) { bxC = bx2; byC = by2; }
+  else { bxC = bx3; byC = by3; }
 
   float rx1, ry1, rx2, ry2, rx3, ry3;
   bool ok12 = linesBeacons(bxA, byA, alphaA, bxB, byB, alphaB, rx1, ry1);
@@ -190,21 +226,10 @@ bool computeRobotPosition(float &finalX, float &finalY) {
 
   int okCount = 0;
   float sumX = 0, sumY = 0;
-  if (ok12) {
-    sumX += rx1;
-    sumY += ry1;
-    okCount++;
-  }
-  if (ok23) {
-    sumX += rx2;
-    sumY += ry2;
-    okCount++;
-  }
-  if (ok31) {
-    sumX += rx3;
-    sumY += ry3;
-    okCount++;
-  }
+
+  if (ok12) { sumX += rx1; sumY += ry1; okCount++; }
+  if (ok23) { sumX += rx2; sumY += ry2; okCount++; }
+  if (ok31) { sumX += rx3; sumY += ry3; okCount++; }
 
   if (okCount == 0) return false;
 
@@ -214,6 +239,19 @@ bool computeRobotPosition(float &finalX, float &finalY) {
 }
 
 // ------------------ BEACON DETECTION ----------------------
+
+/*
+ * Detects a rising edge (LOW to HIGH) on a beacon pin with debouncing.
+ *
+ * Inputs:
+ *   pin        — digital pin to read
+ *   lastState  — reference to stored previous pin state
+ *   lastTime   — reference to stored last event time
+ *
+ * Returns:
+ *   true  — a valid rising edge occurred
+ *   false — otherwise
+ */
 bool risingEdge(int pin, bool &lastState, unsigned long &lastTime) {
   bool cur = digitalRead(pin);
   if (cur && !lastState) {
@@ -228,6 +266,10 @@ bool risingEdge(int pin, bool &lastState, unsigned long &lastTime) {
   return false;
 }
 
+/*
+ * Records a detection entry (beacon ID + timestamp) in the global list.
+ * Does nothing if storage is full.
+ */
 void recordDetection(int id) {
   if (detCount >= MAX_DETECTIONS) return;
   detections[detCount].id = id;
@@ -236,6 +278,22 @@ void recordDetection(int id) {
 }
 
 // --------------------- SCAN & TRIANGULATE -----------------
+
+/*
+ * Rotates the robot while listening for rising edges from the three beacon sensors.
+ * Collects detection events until either:
+ *   - At least 4 events are detected (A B C A pattern)
+ *   - Timeout expires
+ *
+ * After scanning, motors stop and triangulation is attempted.
+ *
+ * Output:
+ *   outX, outY — estimated robot position if successful
+ *
+ * Returns:
+ *   true  — triangulation succeeded
+ *   false — failed or insufficient data
+ */
 bool scanTriangulate(float &outX, float &outY) {
   detCount = 0;
   lastState1 = lastState2 = lastState3 = LOW;
@@ -259,6 +317,10 @@ bool scanTriangulate(float &outX, float &outY) {
 }
 
 // ------------------------ SETUP & LOOP --------------------
+
+/*
+ * Initializes serial output, motor pins, and beacon input pins.
+ */
 void setup() {
   Serial.begin(115200);
 
@@ -275,6 +337,9 @@ void setup() {
   Serial.println("Triangulation sketch ready.");
 }
 
+/*
+ * Repeatedly runs a full scan with triangulation cycle every 60 seconds.
+ */
 void loop() {
   float rx = 0, ry = 0;
   if (scanTriangulate(rx, ry)) {
@@ -285,5 +350,5 @@ void loop() {
   } else {
     Serial.println("Triangulation failed.");
   }
-  delay(3000);
+  delay(60000);
 }
