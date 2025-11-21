@@ -2,21 +2,16 @@
 the robot. Another code is available on the GitHub repo for true implementation. This 
 version is only for logic and testing.*/
 
-#include <Arduino.h>
 
-// ------------------------- CONFIG -------------------------
-const int BEACON1_PIN = 2;
-const int BEACON2_PIN = 3;
-const int BEACON3_PIN = 4;
 
-const int LEFT_FWD_PIN = 5;
-const int LEFT_BWD_PIN = 6;
-const int RIGHT_FWD_PIN = 9;
-const int RIGHT_BWD_PIN = 10;
+#include <iostream>
+#include <cmath>
+#include <vector>
+using namespace std;
 
-const int ROTATE_PWM = 200;
-
-// Beacon coordinates
+// ------------------- BEACON COORDINATES -------------------
+//These coordinates are interchangeable, and can be changed to any
+//positive value
 const float bx1 = 0.0;
 const float by1 = 0.0;
 const float bx2 = 0.0;
@@ -24,331 +19,150 @@ const float by2 = 100.0;
 const float bx3 = 50.0;
 const float by3 = 100.0;
 
-const unsigned long DEBOUNCE_MS = 40;
-const unsigned long SCAN_TIMEOUT_MS = 12000;
-
-// ----------------------- GLOBALS ---------------------------
-bool lastState1 = LOW;
-bool lastState2 = LOW;
-bool lastState3 = LOW;
-
-unsigned long lastTime1 = 0;
-unsigned long lastTime2 = 0;
-unsigned long lastTime3 = 0;
-
+//Gives an ID to each beacon and calculates the time
+//between each beacon detection
 struct Detection {
-  int id;
-  unsigned long time;
+    int id;
+    float time;
 };
 
-#define MAX_DETECTIONS 16
-Detection detections[MAX_DETECTIONS];
-int detCount = 0;
+vector<Detection> detections;
 
-// ----------------------- UTILS -----------------------------
+// ------------------------- UTILS ---------------------------
+float degToRad(float deg) { return deg * M_PI / 180.0; }
+float radToDeg(float rad) { return rad * 180.0 / M_PI; }
 
-/*
- * Converts degrees to radians.
- * Input: angle in degrees.
- * Output: angle in radians.
- */
-float degToRad(float deg) {
-  return deg * 3.1415926535 / 180.0;
-}
-
-/*
- * Converts radians to degrees.
- * Input: angle in radians.
- * Output: angle in degrees.
- */
-float radToDeg(float rad) {
-  return rad * 180.0 / 3.1415926535;
-}
-
-/*
- * Immediately stops all motor outputs by setting PWM to zero.
- * No inputs, no return.
- */
-void stopMotors() {
-  analogWrite(LEFT_FWD_PIN, 0);
-  analogWrite(LEFT_BWD_PIN, 0);
-  analogWrite(RIGHT_FWD_PIN, 0);
-  analogWrite(RIGHT_BWD_PIN, 0);
-}
-
-/*
- * Rotates the robot in place by driving left motor forward and right motor backward.
- * Input: pwm — rotation motor speed.
- * No return value.
- */
-void rotate(int pwm) {
-  analogWrite(LEFT_FWD_PIN, pwm);
-  analogWrite(LEFT_BWD_PIN, 0);
-  analogWrite(RIGHT_FWD_PIN, 0);
-  analogWrite(RIGHT_BWD_PIN, pwm);
-}
-
-// ---------------- LINE INTERSECTION ------------------------
-
-/*
- * Computes the intersection point of two lines, each defined by a beacon position
- * and a measured bearing angle from the robot.
- *
- * Inputs:
- *   (xA, yA), alphaA — beacon A position and angle
- *   (xB, yB), alphaB — beacon B position and angle
- *
- * Outputs:
- *   rx, ry — intersection point (robot estimate)
- *
- * Returns:
- *   true  — intersection exists
- *   false — lines are parallel or nearly parallel
- */
+// ------------ LINE INTERSECTION BETWEEN 2 BEACONS ----------
 bool linesBeacons(float xA, float yA, float alphaA,
                   float xB, float yB, float alphaB,
-                  float &rx, float &ry) {
-  float ux = -cos(alphaA);
-  float uy = -sin(alphaA);
-  float vx = -cos(alphaB);
-  float vy = -sin(alphaB);
+                  float &rx, float &ry) 
+{
+    float ux = -cos(alphaA);
+    float uy = -sin(alphaA);
+    float vx = -cos(alphaB);
+    float vy = -sin(alphaB);
 
-  float dx = xB - xA;
-  float dy = yB - yA;
+    float dx = xB - xA;
+    float dy = yB - yA;
 
-  float denom = (ux * (-vy) - uy * (-vx));
-  if (fabs(denom) < 1e-6) return false;
+    float denom = (ux * (-vy) - uy * (-vx));
+    if (fabs(denom) < 1e-6) return false;
 
-  float s = (dx * (-vy) - dy * (-vx)) / denom;
-  rx = xA + s * ux;
-  ry = yA + s * uy;
-  return true;
+    //Calculates the coordinates ofmiddle of the line (M)
+    //from beacon X to beacon Y
+    float s = (dx * (-vy) - dy * (-vx)) / denom;
+    rx = xA + s * ux;
+    ry = yA + s * uy;
+    return true;
 }
 
-// ---------------- TRIANGULATION ---------------------------
+// -------------------- TRIANGULATION LOGIC ------------------
+bool robotPosition(float &finalX, float &finalY) 
+{
+    if (detections.size() < 4) return false;
 
-/*
- * Computes the robot's position based on detection timestamps.
- *
- * Requires at least four detections in the pattern:
- *   A (first beacon)
- *   B (second beacon)
- *   C (third beacon)
- *   A (same as first beacon)
- *
- * This function extracts time differences, computes angles, computes line
- * intersections between beacon bearings, averages valid intersection points.
- *
- * Output:
- *   finalX, finalY — estimated robot coordinates
- *
- * Returns:
- *   true  — position successfully computed
- *   false — insufficient or invalid detection data
- */
-bool computeRobotPosition(float &finalX, float &finalY) {
-  if (detCount < 4) return false;
+    int i0 = 0;
+    int i1 = -1, i2 = -1, i3 = -1;
+    int id0 = detections[0].id;
 
-  int i0 = 0;
-  int id0 = detections[i0].id;
-  int i1 = -1, i2 = -1, i3 = -1;
-
-  for (int i = 1; i < detCount; i++) {
-    if (detections[i].id != id0 && i1 == -1) {
-      i1 = i;
-      continue;
+    // find pattern of beacons A B C A
+    for (int i = 1; i < detections.size(); i++) {
+        if (detections[i].id != id0 && i1 == -1) { i1 = i; continue; }
+        if (i1 != -1 && detections[i].id != id0 && detections[i].id != detections[i1].id && i2 == -1) { i2 = i; continue; }
+        if (i2 != -1 && detections[i].id == id0) { i3 = i; break; }
     }
-    if (i1 != -1 && detections[i].id != id0 && detections[i].id != detections[i1].id && i2 == -1) {
-      i2 = i;
-      continue;
+
+    //If no detection is made, report the error
+    if (i1 == -1 || i2 == -1 || i3 == -1) return false;
+
+    float t1 = detections[i0].time;
+    float t2 = detections[i1].time;
+    float t3 = detections[i2].time;
+    float t4 = detections[i3].time;
+
+    //timestamps between each beacons
+    float dt12 = t2 - t1;
+    float dt23 = t3 - t2;
+    float dt34 = t4 - t3;
+    float dt14 = t4 - t1;
+
+    if (dt14 <= 0) return false;
+
+    //Calculate angle from each triangle
+    float angle12 = (dt12 / dt14) * 360.0;
+    float angle23 = (dt23 / dt14) * 360.0;
+    float angle31 = (dt34 / dt14) * 360.0;
+
+    int idA = detections[i0].id;
+    int idB = detections[i1].id;
+    int idC = detections[i2].id;
+
+    float bA = 0;
+    float bB = angle12;
+    float bC = angle12 + angle23;
+
+    float alphaA = degToRad(fmod(bA+360,360)); // Calculates floating point remainder
+    float alphaB = degToRad(fmod(bB+360,360));
+    float alphaC = degToRad(fmod(bC+360,360));
+
+    float Ax, Ay, Bx, By, Cx, Cy;
+
+    //Lambda function (helper function)
+    auto beaconCoord = [&](int id, float &x, float &y){
+        if (id == 1){ x=bx1; y=by1; }
+        else if(id==2){ x=bx2; y=by2; }
+        else{ x=bx3; y=by3; }
+    };
+
+    beaconCoord(idA, Ax, Ay);
+    beaconCoord(idB, Bx, By);
+    beaconCoord(idC, Cx, Cy);
+
+    //Calculate 3 distances from the 3 triangles
+    float rx1, ry1, rx2, ry2, rx3, ry3;
+    bool ok12 = linesBeacons(Ax, Ay, alphaA, Bx, By, alphaB, rx1, ry1);
+    bool ok23 = linesBeacons(Bx, By, alphaB, Cx, Cy, alphaC, rx2, ry2);
+    bool ok31 = linesBeacons(Cx, Cy, alphaC, Ax, Ay, alphaA, rx3, ry3);
+
+    int ok = 0;
+    float sumX = 0, sumY = 0;
+
+    if (ok12){ sumX+=rx1; sumY+=ry1; ok++; }
+    if (ok23){ sumX+=rx2; sumY+=ry2; ok++; }
+    if (ok31){ sumX+=rx3; sumY+=ry3; ok++; }
+
+    if (ok == 0) return false;
+
+    //Find the average and use it as the final coordinates
+    finalX = sumX / ok;
+    finalY = sumY / ok;
+    return true;
+}
+
+// ----------------------------- MAIN -----------------------
+int main() 
+{
+    cout << "Enter detections in format: <beaconID> <timestamp_ms>\n";
+    cout << "Enter 4 detections in order A B C A.\n\n";
+
+    detections.clear();
+    for (int i = 0; i < 4; i++) {
+        Detection d;
+        cout << "Detection " << i+1 << ": ";
+        cin >> d.id >> d.time;
+        detections.push_back(d);
     }
-    if (i2 != -1 && detections[i].id == id0) {
-      i3 = i;
-      break;
+
+    float rx, ry;
+    bool ok = robotPosition(rx, ry);
+
+    if (!ok) {
+        cout << "\nTriangulation Failed.\n";
+    } else {
+        cout << "\nEstimated Robot Position:\n";
+        cout << "X = " << rx << endl;
+        cout << "Y = " << ry << endl;
     }
-  }
 
-  if (i1 == -1 || i2 == -1 || i3 == -1) return false;
-
-  unsigned long t1 = detections[i0].time;
-  unsigned long t2 = detections[i1].time;
-  unsigned long t3 = detections[i2].time;
-  unsigned long t4 = detections[i3].time;
-
-  float dt12 = (float)(t2 - t1);
-  float dt23 = (float)(t3 - t2);
-  float dt34 = (float)(t4 - t3);
-  float dt14 = (float)(t4 - t1);
-
-  if (dt14 <= 0.0f) return false;
-
-  float angle12 = (dt12 / dt14) * 360.0;
-  float angle23 = (dt23 / dt14) * 360.0;
-  float angle31 = (dt34 / dt14) * 360.0;
-
-  int idA = detections[i0].id;
-  int idB = detections[i1].id;
-  int idC = detections[i2].id;
-
-  float bA = 0;
-  float bB = angle12;
-  float bC = angle12 + angle23;
-
-  while (bA < 0) bA += 360;
-  while (bA >= 360) bA -= 360;
-  while (bB < 0) bB += 360;
-  while (bB >= 360) bB -= 360;
-  while (bC < 0) bC += 360;
-  while (bC >= 360) bC -= 360;
-
-  float alphaA = degToRad(bA);
-  float alphaB = degToRad(bB);
-  float alphaC = degToRad(bC);
-
-  float bxA, byA, bxB, byB, bxC, byC;
-
-  if (idA == 1) { bxA = bx1; byA = by1; }
-  else if (idA == 2) { bxA = bx2; byA = by2; }
-  else { bxA = bx3; byA = by3; }
-
-  if (idB == 1) { bxB = bx1; byB = by1; }
-  else if (idB == 2) { bxB = bx2; byB = by2; }
-  else { bxB = bx3; byB = by3; }
-
-  if (idC == 1) { bxC = bx1; byC = by1; }
-  else if (idC == 2) { bxC = bx2; byC = by2; }
-  else { bxC = bx3; byC = by3; }
-
-  float rx1, ry1, rx2, ry2, rx3, ry3;
-  bool ok12 = linesBeacons(bxA, byA, alphaA, bxB, byB, alphaB, rx1, ry1);
-  bool ok23 = linesBeacons(bxB, byB, alphaB, bxC, byC, alphaC, rx2, ry2);
-  bool ok31 = linesBeacons(bxC, byC, alphaC, bxA, byA, alphaA, rx3, ry3);
-
-  int okCount = 0;
-  float sumX = 0, sumY = 0;
-
-  if (ok12) { sumX += rx1; sumY += ry1; okCount++; }
-  if (ok23) { sumX += rx2; sumY += ry2; okCount++; }
-  if (ok31) { sumX += rx3; sumY += ry3; okCount++; }
-
-  if (okCount == 0) return false;
-
-  finalX = sumX / (float)okCount;
-  finalY = sumY / (float)okCount;
-  return true;
-}
-
-// ------------------ BEACON DETECTION ----------------------
-
-/*
- * Detects a rising edge (LOW to HIGH) on a beacon pin with debouncing.
- *
- * Inputs:
- *   pin        — digital pin to read
- *   lastState  — reference to stored previous pin state
- *   lastTime   — reference to stored last event time
- *
- * Returns:
- *   true  — a valid rising edge occurred
- *   false — otherwise
- */
-bool risingEdge(int pin, bool &lastState, unsigned long &lastTime) {
-  bool cur = digitalRead(pin);
-  if (cur && !lastState) {
-    unsigned long now = millis();
-    if (now - lastTime > DEBOUNCE_MS) {
-      lastTime = now;
-      lastState = cur;
-      return true;
-    }
-  }
-  if (!cur) lastState = cur;
-  return false;
-}
-
-/*
- * Records a detection entry (beacon ID + timestamp) in the global list.
- * Does nothing if storage is full.
- */
-void recordDetection(int id) {
-  if (detCount >= MAX_DETECTIONS) return;
-  detections[detCount].id = id;
-  detections[detCount].time = millis();
-  detCount++;
-}
-
-// --------------------- SCAN & TRIANGULATE -----------------
-
-/*
- * Rotates the robot while listening for rising edges from the three beacon sensors.
- * Collects detection events until either:
- *   - At least 4 events are detected (A B C A pattern)
- *   - Timeout expires
- *
- * After scanning, motors stop and triangulation is attempted.
- *
- * Output:
- *   outX, outY — estimated robot position if successful
- *
- * Returns:
- *   true  — triangulation succeeded
- *   false — failed or insufficient data
- */
-bool scanTriangulate(float &outX, float &outY) {
-  detCount = 0;
-  lastState1 = lastState2 = lastState3 = LOW;
-  lastTime1 = lastTime2 = lastTime3 = 0;
-
-  unsigned long start = millis();
-  rotate(ROTATE_PWM);
-  Serial.println("Rotating and scanning for beacons...");
-
-  while (millis() - start < SCAN_TIMEOUT_MS) {
-    if (risingEdge(BEACON1_PIN, lastState1, lastTime1)) recordDetection(1);
-    if (risingEdge(BEACON2_PIN, lastState2, lastTime2)) recordDetection(2);
-    if (risingEdge(BEACON3_PIN, lastState3, lastTime3)) recordDetection(3);
-
-    if (detCount >= 4) break;
-    delay(1);
-  }
-
-  stopMotors();
-  return computeRobotPosition(outX, outY);
-}
-
-// ------------------------ SETUP & LOOP --------------------
-
-/*
- * Initializes serial output, motor pins, and beacon input pins.
- */
-void setup() {
-  Serial.begin(115200);
-
-  pinMode(LEFT_FWD_PIN, OUTPUT);
-  pinMode(LEFT_BWD_PIN, OUTPUT);
-  pinMode(RIGHT_FWD_PIN, OUTPUT);
-  pinMode(RIGHT_BWD_PIN, OUTPUT);
-  stopMotors();
-
-  pinMode(BEACON1_PIN, INPUT);
-  pinMode(BEACON2_PIN, INPUT);
-  pinMode(BEACON3_PIN, INPUT);
-
-  Serial.println("Triangulation sketch ready.");
-}
-
-/*
- * Repeatedly runs a full scan with triangulation cycle every 60 seconds.
- */
-void loop() {
-  float rx = 0, ry = 0;
-  if (scanTriangulate(rx, ry)) {
-    Serial.print("Estimated robot X: ");
-    Serial.println(rx, 3);
-    Serial.print("Estimated robot Y: ");
-    Serial.println(ry, 3);
-  } else {
-    Serial.println("Triangulation failed.");
-  }
-  delay(60000);
+    return 0;
 }
