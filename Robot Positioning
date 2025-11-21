@@ -1,0 +1,239 @@
+/*Implementation of robot positioning using IR Beacons and triangulation.
+This code should be uploaded to the arduino controlling the robot*/
+
+#include <SoftwareSerial.h>
+
+// --------------------------- RECEIVER -----------------------------
+SoftwareSerial IRSerial(8, 12);
+
+String incoming = "";
+
+// ------------------------- MOTOR CONFIG ---------------------------
+const int LEFT_FWD_PIN = 3;
+const int LEFT_BWD_PIN = 4;
+const int RIGHT_FWD_PIN = 5;
+const int RIGHT_BWD_PIN = 6;
+const int ENA1 = 9;
+const int ENA2 = 10;
+
+const int speed = 50;
+
+// ---------------------- BEACON COORDINATES ------------------------
+const float bx1 = 0.0,  by1 = 0.0;
+const float bx2 = 0.0,  by2 = 1000.0;
+const float bx3 = 500.0, by3 = 500.0;
+
+// --------------------- BEACON PACKET MAP --------------------------
+int decodeBeaconID(String s) {
+  if (s == "111") return 1;
+  if (s == "222") return 2;
+  if (s == "333") return 3;
+  return 0;
+}
+
+// ---------------------- TRIANGULATION DATA ------------------------
+struct Detection {
+  int id;
+  unsigned long time;
+};
+
+#define MAX_DETECTIONS 20
+Detection detections[MAX_DETECTIONS];
+int detCount = 0;
+
+const unsigned long SCAN_TIMEOUT_MS = 15000;
+
+// ---------------------- UTIL FUNCTIONS ----------------------------
+float degToRad(float d){ return d * PI / 180.0; }
+float radToDeg(float r){ return r * 180.0 / PI; }
+
+void stopMotors() {
+  digitalWrite(LEFT_FWD_PIN, 0);
+  digitalWrite(LEFT_BWD_PIN, 0);
+  digitalWrite(RIGHT_FWD_PIN, 0);
+  digitalWrite(RIGHT_BWD_PIN, 0);
+}
+
+void rotate(int pwm) {
+  digitalWrite(LEFT_FWD_PIN, pwm);
+  digitalWrite(LEFT_BWD_PIN, 0);
+  digitalWrite(RIGHT_FWD_PIN, 0);
+  digitalWrite(RIGHT_BWD_PIN, pwm);
+}
+
+// ---------------- LINE INTERSECTION (unchanged) -------------------
+bool linesBeacons(float xA, float yA, float alphaA,
+                  float xB, float yB, float alphaB,
+                  float &rx, float &ry) {
+
+  float ux = -cos(alphaA);
+  float uy = -sin(alphaA);
+  float vx = -cos(alphaB);
+  float vy = -sin(alphaB);
+
+  float dx = xB - xA;
+  float dy = yB - yA;
+
+  float denom = (ux * (-vy) - uy * (-vx));
+  if (fabs(denom) < 1e-6) return false;
+
+  float s = (dx * (-vy) - dy * (-vx)) / denom;
+  rx = xA + s * ux;
+  ry = yA + s * uy;
+  return true;
+}
+
+// ------------------- DETECTION RECORD -----------------------------
+void recordDetection(int id) {
+  if (detCount >= MAX_DETECTIONS) return;
+
+  detections[detCount].id = id;
+  detections[detCount].time = millis();
+  detCount++;
+
+  Serial.print("Detected beacon "); Serial.println(id);
+}
+
+// -------------- READ SOFTWARE SERIAL BEACON PACKETS ---------------
+void readBeacons() {
+  while (IRSerial.available()) {
+    char c = IRSerial.read();
+    if (c == '\n' || c == '\r') {
+
+      int id = decodeBeaconID(incoming);
+      if (id > 0) recordDetection(id);
+
+      incoming = "";
+    } else {
+      incoming += c;
+    }
+  }
+}
+
+// ---------------- TRIANGULATION (unchanged logic) -----------------
+bool computeRobotPosition(float &finalX, float &finalY) {
+
+  if (detCount < 4) return false;
+
+  int i0 = 0;
+  int id0 = detections[i0].id;
+  int i1=-1, i2=-1, i3=-1;
+
+  for(int i=1;i<detCount;i++){
+    if(detections[i].id != id0 && i1==-1){ i1=i; continue;}
+    if(i1!=-1 && detections[i].id != id0 &&
+       detections[i].id != detections[i1].id && i2==-1){ i2=i; continue;}
+    if(i2!=-1 && detections[i].id == id0){ i3=i; break;}
+  }
+
+  if(i1==-1 || i2==-1 || i3==-1) return false;
+
+  unsigned long t1=detections[i0].time;
+  unsigned long t2=detections[i1].time;
+  unsigned long t3=detections[i2].time;
+  unsigned long t4=detections[i3].time;
+
+  float dt12 = (float)(t2 - t1);
+  float dt23 = (float)(t3 - t2);
+  float dt34 = (float)(t4 - t3);
+  float dt14 = (float)(t4 - t1);
+
+  if(dt14<=0) return false;
+
+  float angle12 = (dt12/dt14)*360.0;
+  float angle23 = (dt23/dt14)*360.0;
+
+  float bA=0;
+  float bB=angle12;
+  float bC=angle12+angle23;
+
+  float alphaA=degToRad(bA);
+  float alphaB=degToRad(bB);
+  float alphaC=degToRad(bC);
+
+  float bxA, byA, bxB, byB, bxC, byC;
+
+  int idA = detections[i0].id;
+  int idB = detections[i1].id;
+  int idC = detections[i2].id;
+
+  (idA==1)?(bxA=bx1,byA=by1):(idA==2)?(bxA=bx2,byA=by2):(bxA=bx3,byA=by3);
+  (idB==1)?(bxB=bx1,byB=by1):(idB==2)?(bxB=bx2,byB=by2):(bxB=bx3,byB=by3);
+  (idC==1)?(bxC=bx1,byC=by1):(idC==2)?(bxC=bx2,byC=by2):(bxC=bx3,byC=by3);
+
+  float rx1,ry1,rx2,ry2,rx3,ry3;
+  bool ok12 = linesBeacons(bxA,byA,alphaA, bxB,byB,alphaB, rx1,ry1);
+  bool ok23 = linesBeacons(bxB,byB,alphaB, bxC,byC,alphaC, rx2,ry2);
+  bool ok31 = linesBeacons(bxC,byC,alphaC, bxA,byA,alphaA, rx3,ry3);
+
+  int okCount=0;
+  float sumX=0,sumY=0;
+
+  if(ok12){ sumX+=rx1; sumY+=ry1; okCount++; }
+  if(ok23){ sumX+=rx2; sumY+=ry2; okCount++; }
+  if(ok31){ sumX+=rx3; sumY+=ry3; okCount++; }
+
+  if(okCount==0) return false;
+
+  finalX = sumX / okCount;
+  finalY = sumY / okCount;
+  return true;
+}
+
+// --------------------- SCAN + TRIANGULATE -------------------------
+bool scanTriangulate(float &outX, float &outY) {
+  
+  detCount = 0;
+  unsigned long start = millis();
+
+  rotate(speed);
+  Serial.println("Rotating and listening for beacons…");
+
+  while (millis() - start < SCAN_TIMEOUT_MS) {
+
+    readBeacons();  // real incoming beacon packets
+
+    if(detCount >= 4) break;
+
+    delay(1);
+  }
+
+  stopMotors();
+  return computeRobotPosition(outX, outY);
+}
+
+// --------------------------- SETUP --------------------------------
+void setup() {
+  Serial.begin(115200); // Only used for debugging and testing
+  IRSerial.begin(9600);
+
+  pinMode(LEFT_FWD_PIN, OUTPUT);
+  pinMode(LEFT_BWD_PIN, OUTPUT);
+  pinMode(RIGHT_FWD_PIN, OUTPUT);
+  pinMode(RIGHT_BWD_PIN, OUTPUT);
+
+  pinMode(ENA1, OUTPUT);
+  pinMode(ENA2, OUTPUT);
+
+  analogWrite(ENA1, speed);
+  analogWrite(ENA2, speed);  
+
+  stopMotors();
+  Serial.println("Triangulation with IR beacons READY.");
+}
+
+// ---------------------------- LOOP --------------------------------
+void loop() {
+
+  delay(10000);
+  float x,y;
+
+  if (scanTriangulate(x,y)) {
+    IRSerial.print("X = "); IRSerial.println(x,3);
+    IRSerial.print("Y = "); IRSerial.println(y,3);
+  } else {
+    IRSerial.println("Triangulation failed.");
+  }
+
+  delay(30000);
+}
