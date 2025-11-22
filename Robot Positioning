@@ -61,7 +61,7 @@ void rotate(int pwm) {
   digitalWrite(RIGHT_BWD_PIN, pwm);
 }
 
-// ---------------- LINE INTERSECTION (unchanged) -------------------
+// ---------------- LINE INTERSECTION -------------------
 bool linesBeacons(float xA, float yA, float alphaA,
                   float xB, float yB, float alphaB,
                   float &rx, float &ry) {
@@ -110,7 +110,7 @@ void readBeacons() {
   }
 }
 
-// ---------------- TRIANGULATION (unchanged logic) -----------------
+// ---------------- TRIANGULATION -----------------
 bool computeRobotPosition(float &finalX, float &finalY) {
 
   if (detCount < 4) return false;
@@ -228,6 +228,7 @@ void loop() {
   delay(10000);
   float x,y;
 
+  //Print out the coordinates of the robot
   if (scanTriangulate(x,y)) {
     IRSerial.print("X = "); IRSerial.println(x,3);
     IRSerial.print("Y = "); IRSerial.println(y,3);
@@ -235,5 +236,5 @@ void loop() {
     IRSerial.println("Triangulation failed.");
   }
 
-  delay(30000);
+  delay(30000); //wait 30 sec before next triangulation
 }
